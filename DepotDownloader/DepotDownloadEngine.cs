@@ -379,14 +379,5 @@ public sealed class DepotDownloadEngine : IDepotDownloadEngine
     {
         if (_disposed) return;
         _disposed = true;
-
-        try
-        {
-            ContentDownloader.ShutdownSteam3();
-        }
-        catch
-        {
-            // Best effort cleanup
-        }
     }
 }

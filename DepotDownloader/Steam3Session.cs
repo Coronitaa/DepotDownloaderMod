@@ -46,6 +46,7 @@ namespace DepotDownloader
         readonly bool authenticatedUser;
         bool bConnecting;
         bool bAborted;
+        public bool IsAborted => bAborted;
         bool bExpectingDisconnectRemote;
         bool bDidDisconnect;
         bool bIsConnectionRecovery;

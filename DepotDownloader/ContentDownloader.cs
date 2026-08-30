@@ -295,9 +295,21 @@ namespace DepotDownloader
 
         public static bool InitializeSteam3(string username, string password)
         {
+            if (steam3 != null && steam3.IsLoggedOn)
+            {
+                return true;
+            }
+
+            ShutdownSteam3();
+
+            if (AccountSettingsStore.Instance == null)
+            {
+                try { AccountSettingsStore.LoadFromFile("account.config"); } catch { }
+            }
+
             string loginToken = null;
 
-            if (username != null && Config.RememberPassword)
+            if (username != null && Config.RememberPassword && AccountSettingsStore.Instance != null)
             {
                 _ = AccountSettingsStore.Instance.LoginTokens.TryGetValue(username, out loginToken);
             }
@@ -313,9 +325,20 @@ namespace DepotDownloader
                 }
             );
 
-            if (!steam3.WaitForCredentials())
+            bool loggedOn = false;
+            for (int i = 0; i < 5 && !loggedOn; i++)
+            {
+                loggedOn = steam3.WaitForCredentials();
+                if (!loggedOn && !steam3.IsAborted)
+                {
+                    Thread.Sleep(500);
+                }
+            }
+
+            if (!loggedOn)
             {
                 Console.WriteLine("Unable to get steam3 credentials.");
+                ShutdownSteam3();
                 return false;
             }
 
@@ -329,7 +352,18 @@ namespace DepotDownloader
             if (steam3 == null)
                 return;
 
-            steam3.Disconnect();
+            try
+            {
+                steam3.Disconnect();
+            }
+            catch
+            {
+                // Best effort
+            }
+            finally
+            {
+                steam3 = null;
+            }
         }
 
         public static async Task DownloadPubfileAsync(uint appId, ulong publishedFileId)
@@ -882,6 +916,24 @@ namespace DepotDownloader
             }
 
             Console.WriteLine("Manifest {0} ({1})", depot.ManifestId, newManifest.CreationTime);
+
+            if (oldManifest != null && oldManifest.FilenamesEncrypted)
+            {
+                if (!oldManifest.DecryptFilenames(depot.DepotKey))
+                {
+                    Console.WriteLine("Warning: Failed to decrypt filenames for old manifest depot {0}.", depot.DepotId);
+                    oldManifest = null;
+                }
+            }
+
+            if (newManifest.FilenamesEncrypted)
+            {
+                if (!newManifest.DecryptFilenames(depot.DepotKey))
+                {
+                    Console.WriteLine("Error: Failed to decrypt filenames for depot {0}. Invalid or missing depot key.", depot.DepotId);
+                    return null;
+                }
+            }
 
             if (Config.DownloadManifestOnly)
             {

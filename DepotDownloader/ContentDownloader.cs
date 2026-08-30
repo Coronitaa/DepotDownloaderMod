@@ -1022,13 +1022,32 @@ namespace DepotDownloader
                 }
             });
 
-            await Parallel.ForEachAsync(networkChunkQueue, parallelOptions, async (q, cancellationToken) =>
+            try
             {
-                await DownloadSteam3AsyncDepotFileChunk(
-                    cts, downloadCounter, depotFilesData,
-                    q.fileData, q.fileStreamData, q.chunk
-                );
-            });
+                await Parallel.ForEachAsync(networkChunkQueue, parallelOptions, async (q, cancellationToken) =>
+                {
+                    await DownloadSteam3AsyncDepotFileChunk(
+                        cts, downloadCounter, depotFilesData,
+                        q.fileData, q.fileStreamData, q.chunk
+                    );
+                });
+            }
+            finally
+            {
+                // CRITICAL: Ensure ALL open FileStreams and Semaphores are closed & disposed on completion, pause, cancellation, or error!
+                var uniqueFileStreams = networkChunkQueue.Select(x => x.fileStreamData).Distinct();
+                foreach (var fsd in uniqueFileStreams)
+                {
+                    try
+                    {
+                        fsd.fileStream?.Flush();
+                        fsd.fileStream?.Dispose();
+                        fsd.fileStream = null;
+                        fsd.fileLock?.Dispose();
+                    }
+                    catch { }
+                }
+            }
 
             // Check for deleted files if updating the depot.
             if (depotFilesData.previousManifest != null)
@@ -1065,6 +1084,73 @@ namespace DepotDownloader
             Console.WriteLine("Depot {0} - Downloaded {1} bytes ({2} bytes uncompressed)", depot.DepotId, depotCounter.depotBytesCompressed, depotCounter.depotBytesUncompressed);
         }
 
+        private static FileStream SafeOpenFileStream(string path, FileMode mode, FileAccess access = FileAccess.ReadWrite, FileShare share = FileShare.ReadWrite, int maxRetries = 10, int delayMs = 100)
+        {
+            for (int i = 0; i < maxRetries; i++)
+            {
+                try
+                {
+                    return new FileStream(path, mode, access, share, 81920, useAsync: true);
+                }
+                catch (IOException) when (i < maxRetries - 1)
+                {
+                    Thread.Sleep(delayMs);
+                }
+                catch (UnauthorizedAccessException) when (i < maxRetries - 1)
+                {
+                    Thread.Sleep(delayMs);
+                }
+            }
+            return new FileStream(path, mode, access, share, 81920, useAsync: true);
+        }
+
+        private static void SafeDeleteFile(string path, int maxRetries = 5, int delayMs = 100)
+        {
+            if (!File.Exists(path)) return;
+            for (int i = 0; i < maxRetries; i++)
+            {
+                try
+                {
+                    File.Delete(path);
+                    return;
+                }
+                catch (IOException) when (i < maxRetries - 1)
+                {
+                    Thread.Sleep(delayMs);
+                }
+                catch (UnauthorizedAccessException) when (i < maxRetries - 1)
+                {
+                    Thread.Sleep(delayMs);
+                }
+            }
+            try { File.Delete(path); } catch { }
+        }
+
+        private static void SafeMoveFile(string source, string destination, int maxRetries = 5, int delayMs = 100)
+        {
+            for (int i = 0; i < maxRetries; i++)
+            {
+                try
+                {
+                    if (File.Exists(destination))
+                    {
+                        SafeDeleteFile(destination);
+                    }
+                    File.Move(source, destination);
+                    return;
+                }
+                catch (IOException) when (i < maxRetries - 1)
+                {
+                    Thread.Sleep(delayMs);
+                }
+            }
+            if (File.Exists(destination))
+            {
+                SafeDeleteFile(destination);
+            }
+            File.Move(source, destination);
+        }
+
         private static void DownloadSteam3AsyncDepotFile(
             CancellationTokenSource cts,
             GlobalDownloadCounter downloadCounter,
@@ -1090,7 +1176,7 @@ namespace DepotDownloader
             // This may still exist if the previous run exited before cleanup
             if (File.Exists(fileStagingPath))
             {
-                File.Delete(fileStagingPath);
+                SafeDeleteFile(fileStagingPath);
             }
 
             List<DepotManifest.ChunkData> neededChunks;
@@ -1100,8 +1186,8 @@ namespace DepotDownloader
             {
                 Console.WriteLine("Pre-allocating {0}", fileFinalPath);
 
-                // create new file. need all chunks
-                using var fs = File.Create(fileFinalPath);
+                // create new file with sharing allowed. need all chunks
+                using var fs = SafeOpenFileStream(fileFinalPath, FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite);
                 try
                 {
                     fs.SetLength((long)file.TotalSize);
@@ -1148,7 +1234,7 @@ namespace DepotDownloader
 
                         var copyChunks = new List<ChunkMatch>();
 
-                        using (var fsOld = File.Open(fileFinalPath, FileMode.Open))
+                        using (var fsOld = SafeOpenFileStream(fileFinalPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
                         {
                             foreach (var match in orderedChunks)
                             {
@@ -1168,11 +1254,11 @@ namespace DepotDownloader
 
                         if (!hashMatches || neededChunks.Count > 0)
                         {
-                            File.Move(fileFinalPath, fileStagingPath);
+                            SafeMoveFile(fileFinalPath, fileStagingPath);
 
-                            using (var fsOld = File.Open(fileStagingPath, FileMode.Open))
+                            using (var fsOld = SafeOpenFileStream(fileStagingPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
                             {
-                                using var fs = File.Open(fileFinalPath, FileMode.Create);
+                                using var fs = SafeOpenFileStream(fileFinalPath, FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite);
                                 try
                                 {
                                     fs.SetLength((long)file.TotalSize);
@@ -1194,7 +1280,7 @@ namespace DepotDownloader
                                 }
                             }
 
-                            File.Delete(fileStagingPath);
+                            SafeDeleteFile(fileStagingPath);
                         }
                     }
                 }
@@ -1202,7 +1288,7 @@ namespace DepotDownloader
                 {
                     // No old manifest or file not in old manifest. We must validate.
 
-                    using var fs = File.Open(fileFinalPath, FileMode.Open);
+                    using var fs = SafeOpenFileStream(fileFinalPath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
                     if ((ulong)fi.Length != file.TotalSize)
                     {
                         try
@@ -1377,7 +1463,7 @@ namespace DepotDownloader
                     if (fileStreamData.fileStream == null)
                     {
                         var fileFinalPath = Path.Combine(depot.InstallDir, file.FileName);
-                        fileStreamData.fileStream = File.Open(fileFinalPath, FileMode.Open);
+                        fileStreamData.fileStream = SafeOpenFileStream(fileFinalPath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
                     }
 
                     fileStreamData.fileStream.Seek((long)chunk.Offset, SeekOrigin.Begin);
@@ -1394,10 +1480,21 @@ namespace DepotDownloader
             }
 
             var remainingChunks = Interlocked.Decrement(ref fileStreamData.chunksToDownload);
-            if (remainingChunks == 0)
+            if (remainingChunks <= 0)
             {
-                fileStreamData.fileStream?.Dispose();
-                fileStreamData.fileLock.Dispose();
+                try
+                {
+                    await fileStreamData.fileLock.WaitAsync().ConfigureAwait(false);
+                    fileStreamData.fileStream?.Flush();
+                    fileStreamData.fileStream?.Dispose();
+                    fileStreamData.fileStream = null;
+                }
+                catch { }
+                finally
+                {
+                    try { fileStreamData.fileLock.Release(); } catch { }
+                    try { fileStreamData.fileLock.Dispose(); } catch { }
+                }
             }
 
             ulong sizeDownloaded = 0;

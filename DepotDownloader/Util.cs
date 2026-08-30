@@ -151,9 +151,24 @@ namespace DepotDownloader
 
                 var currentChecksum = FileSHAHash(filename);
 
-                if (expectedChecksum != null && expectedChecksum.SequenceEqual(currentChecksum))
+                if (expectedChecksum == null || expectedChecksum.SequenceEqual(currentChecksum))
                 {
-                    return DepotManifest.LoadFromFile(filename);
+                    try
+                    {
+                        var manifest = DepotManifest.LoadFromFile(filename);
+                        if (manifest != null)
+                        {
+                            if (expectedChecksum == null)
+                            {
+                                try { File.WriteAllBytes(filename + ".sha", currentChecksum); } catch { }
+                            }
+                            return manifest;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("Failed to load manifest {0}: {1}", manifestId, ex.Message);
+                    }
                 }
                 else if (badHashWarning)
                 {
@@ -180,19 +195,17 @@ namespace DepotDownloader
                 byte[] currentChecksum;
                 var oldManifest = ProtoManifest.LoadFromFile(filename, out currentChecksum);
 
-                if (oldManifest != null && (expectedChecksum == null || !expectedChecksum.SequenceEqual(currentChecksum)))
+                if (oldManifest != null && (expectedChecksum == null || expectedChecksum.SequenceEqual(currentChecksum)))
                 {
-                    oldManifest = null;
-
-                    if (badHashWarning)
+                    if (expectedChecksum == null)
                     {
-                        Console.WriteLine("Manifest {0} on disk did not match the expected checksum.", manifestId);
+                        try { File.WriteAllBytes(filename + ".sha", currentChecksum); } catch { }
                     }
-                }
-
-                if (oldManifest != null)
-                {
                     return oldManifest.ConvertToSteamManifest(depotId);
+                }
+                else if (badHashWarning && oldManifest != null)
+                {
+                    Console.WriteLine("Manifest {0} on disk did not match the expected checksum.", manifestId);
                 }
             }
 

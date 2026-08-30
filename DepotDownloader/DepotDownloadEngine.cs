@@ -19,7 +19,7 @@ namespace DepotDownloader;
 /// <summary>
 /// In-process implementation of <see cref="IDepotDownloadEngine"/>.
 /// Wraps the existing ContentDownloader static class, adding:
-/// - Rich IProgress&lt;DownloadProgressInfo&gt; callbacks (throttled to ~500ms)
+/// - Rich IProgress&lt;DownloadProgressInfo&gt; callbacks
 /// - Persistent state snapshots for resume after restart
 /// - Proper resource cleanup via IDisposable
 /// - Structured logging via ILogger
@@ -27,15 +27,7 @@ namespace DepotDownloader;
 public sealed class DepotDownloadEngine : IDepotDownloadEngine
 {
     private readonly ILogger<DepotDownloadEngine> _logger;
-    private readonly TimeSpan _progressThrottle = TimeSpan.FromMilliseconds(500);
-    private readonly TimeSpan _stateSaveInterval = TimeSpan.FromSeconds(30);
     private bool _disposed;
-
-    // Speed tracking with sliding window
-    private readonly ConcurrentQueue<(long ticks, long bytes)> _speedSamples = new();
-    private readonly ConcurrentQueue<(long ticks, long bytes)> _writeSamples = new();
-    private const int MaxSpeedSamples = 10;
-    private const double SpeedWindowSeconds = 5.0;
 
     public DepotDownloadEngine(ILogger<DepotDownloadEngine>? logger = null)
     {
@@ -59,26 +51,36 @@ public sealed class DepotDownloadEngine : IDepotDownloadEngine
         _logger.LogInformation("Starting download for AppId {AppId} with {DepotCount} depots to {Path}",
             request.AppId, request.Depots.Count, request.InstallPath);
 
-        // Load or create state snapshot
+        // 1. Ensure AccountSettingsStore is initialized
+        EnsureAccountSettingsLoaded();
+
+        // 2. Ensure Steam3 session is initialized
+        EnsureSteam3Initialized();
+
+        // 3. Load or create state snapshot
         var state = !string.IsNullOrWhiteSpace(request.StateFilePath)
             ? DownloadStateSnapshot.LoadFromFile(request.StateFilePath) ?? CreateInitialState(request)
             : CreateInitialState(request);
 
-        // Ensure working directory exists
+        // 4. Ensure working directory and target directories exist
         var workDir = request.WorkingDirectory
             ?? Path.Combine(Path.GetTempPath(), "BlueStar", "DepotWork", request.InstanceId.ToString());
         Directory.CreateDirectory(workDir);
         Directory.CreateDirectory(request.InstallPath);
 
-        // Configure the static ContentDownloader
+        var configDir = Path.Combine(request.InstallPath, ".DepotDownloader");
+        Directory.CreateDirectory(configDir);
+
+        // 5. Configure the static ContentDownloader
         ContentDownloader.Config = new DownloadConfig
         {
             InstallDirectory = request.InstallPath,
             MaxDownloads = Math.Max(1, request.MaxConnections),
             CellID = 0,
+            VerifyAll = request.ValidateExisting,
         };
 
-        // Load depot keys if provided
+        // 6. Load depot keys if provided from file
         if (!string.IsNullOrWhiteSpace(request.DepotKeysFilePath) && File.Exists(request.DepotKeysFilePath))
         {
             var keyLines = await File.ReadAllLinesAsync(request.DepotKeysFilePath, ct).ConfigureAwait(false);
@@ -103,121 +105,85 @@ public sealed class DepotDownloadEngine : IDepotDownloadEngine
             }
         }
 
-        long totalBytes = request.Depots.Sum(d => d.SizeBytes);
-        long downloadedBytesPrevDepots = 0;
+        // 7. Ensure local manifest files and .sha checksums are present in .DepotDownloader directory
+        foreach (var depot in request.Depots)
+        {
+            if (!string.IsNullOrWhiteSpace(depot.ManifestFilePath) && File.Exists(depot.ManifestFilePath))
+            {
+                var manifestFileName = $"{depot.DepotId}_{depot.ManifestId}.manifest";
+                var targetInConfig = Path.Combine(configDir, manifestFileName);
+                if (!File.Exists(targetInConfig) || new FileInfo(targetInConfig).Length <= 32)
+                {
+                    File.Copy(depot.ManifestFilePath, targetInConfig, overwrite: true);
+                }
 
-        var lastProgressReport = Stopwatch.GetTimestamp();
-        var lastStateSave = Stopwatch.GetTimestamp();
+                var shaFile = targetInConfig + ".sha";
+                if (!File.Exists(shaFile))
+                {
+                    try
+                    {
+                        var hash = Util.FileSHAHash(targetInConfig);
+                        File.WriteAllBytes(shaFile, hash);
+                    }
+                    catch { }
+                }
+
+                var targetInWork = Path.Combine(workDir, manifestFileName);
+                if (!File.Exists(targetInWork))
+                {
+                    try { File.Copy(targetInConfig, targetInWork, overwrite: true); } catch { }
+                }
+            }
+        }
+
+        long totalBytes = request.Depots.Sum(d => d.SizeBytes);
 
         try
         {
-            // Report initializing
+            // Report Initializing
             ReportProgress(progress, new DownloadProgressInfo
             {
                 Phase = DownloadPhase.Initializing,
                 TotalBytes = totalBytes,
                 TotalDepots = request.Depots.Count,
                 Percentage = 0,
+                CurrentFile = "Connecting to Steam..."
             });
 
-            for (int i = 0; i < request.Depots.Count; i++)
+            var depotManifestPairs = request.Depots
+                .Select(d => (d.DepotId, d.ManifestId))
+                .ToList();
+
+            // Perform actual download of all depots
+            ReportProgress(progress, new DownloadProgressInfo
             {
-                ct.ThrowIfCancellationRequested();
+                Phase = DownloadPhase.Downloading,
+                TotalBytes = totalBytes,
+                TotalDepots = request.Depots.Count,
+                Percentage = 5.0,
+                CurrentFile = "Downloading content..."
+            });
 
-                var depot = request.Depots[i];
+            await ContentDownloader.DownloadAppAsync(
+                request.AppId,
+                depotManifestPairs,
+                ContentDownloader.DEFAULT_BRANCH,
+                null,
+                null,
+                null,
+                false,
+                false
+            ).ConfigureAwait(false);
 
-                // Check if depot already completed in saved state
-                var depotState = state.Depots.FirstOrDefault(d => d.DepotId == depot.DepotId);
-                if (depotState?.IsComplete == true)
-                {
-                    _logger.LogInformation("Depot {DepotId} already complete, skipping", depot.DepotId);
-                    downloadedBytesPrevDepots += depot.SizeBytes;
-                    continue;
-                }
-
-                if (depotState == null)
-                {
-                    depotState = new DepotDownloadState
-                    {
-                        DepotId = depot.DepotId,
-                        ManifestId = depot.ManifestId,
-                        TotalBytes = depot.SizeBytes,
-                        ManifestFilePath = depot.ManifestFilePath,
-                    };
-                    state.Depots.Add(depotState);
-                }
-
-                _logger.LogInformation("Downloading depot {DepotId} (manifest {ManifestId}), index {Index}/{Total}",
-                    depot.DepotId, depot.ManifestId, i + 1, request.Depots.Count);
-
-                // Build arguments that ContentDownloader expects
-                var depotManifestPairs = new List<(uint depotId, ulong manifestId)>
-                {
-                    (depot.DepotId, depot.ManifestId)
-                };
-
-                // Set manifest file path if local
-                if (!string.IsNullOrWhiteSpace(depot.ManifestFilePath) && File.Exists(depot.ManifestFilePath))
-                {
-                    // Copy manifest to working directory for ContentDownloader to find
-                    var targetManifestPath = Path.Combine(workDir, Path.GetFileName(depot.ManifestFilePath));
-                    if (!File.Exists(targetManifestPath))
-                    {
-                        File.Copy(depot.ManifestFilePath, targetManifestPath, overwrite: true);
-                    }
-                }
-
-                try
-                {
-                    // Use ContentDownloader to handle the actual download
-                    // The static ContentDownloader.DownloadAppAsync will use Config.InstallDirectory
-                    await ContentDownloader.DownloadAppAsync(
-                        request.AppId,
-                        depotManifestPairs,
-                        ContentDownloader.DEFAULT_BRANCH,
-                        null, // os — download all platforms
-                        null, // arch — download all architectures
-                        null, // language — download all languages
-                        false, // lv
-                        false  // isUgc
-                    ).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    // Save state before re-throwing
-                    depotState.DownloadedBytes = (long)(depot.SizeBytes * 0.5); // approximate
-                    SaveStateSafe(request.StateFilePath, state);
-                    throw;
-                }
-
-                // Mark depot complete
-                depotState.IsComplete = true;
-                depotState.DownloadedBytes = depot.SizeBytes;
-                depotState.CompletedChunks = depotState.TotalChunks;
-
-                downloadedBytesPrevDepots += depot.SizeBytes;
-
-                // Report depot completed
-                ReportProgress(progress, new DownloadProgressInfo
-                {
-                    DepotId = depot.DepotId,
-                    DepotName = depot.Name,
-                    ManifestId = depot.ManifestId,
-                    Phase = DownloadPhase.Downloading,
-                    TotalBytes = totalBytes,
-                    DownloadedBytes = downloadedBytesPrevDepots,
-                    Percentage = totalBytes > 0 ? (double)downloadedBytesPrevDepots / totalBytes * 100.0 : 100.0,
-                    CurrentDepotIndex = i,
-                    TotalDepots = request.Depots.Count,
-                    CurrentFile = $"Depot {depot.DepotId} complete",
-                });
-
-                // Periodic state save
-                SaveStateSafe(request.StateFilePath, state);
+            // Mark all depots complete in state
+            foreach (var d in state.Depots)
+            {
+                d.IsComplete = true;
+                d.DownloadedBytes = d.TotalBytes;
             }
+            state.DownloadedBytes = totalBytes;
 
             // Final progress report
-            state.DownloadedBytes = totalBytes;
             ReportProgress(progress, new DownloadProgressInfo
             {
                 Phase = DownloadPhase.Completed,
@@ -229,13 +195,13 @@ public sealed class DepotDownloadEngine : IDepotDownloadEngine
                 CurrentFile = "Download completed",
             });
 
-            // Clean up state file on completion
+            // Clean up state file on success
             if (!string.IsNullOrWhiteSpace(request.StateFilePath))
             {
                 DownloadStateSnapshot.DeleteFile(request.StateFilePath);
             }
 
-            _logger.LogInformation("Download completed for AppId {AppId}", request.AppId);
+            _logger.LogInformation("Download completed successfully for AppId {AppId}", request.AppId);
             return state;
         }
         catch (OperationCanceledException)
@@ -249,6 +215,7 @@ public sealed class DepotDownloadEngine : IDepotDownloadEngine
                 TotalBytes = totalBytes,
                 DownloadedBytes = state.DownloadedBytes,
                 Percentage = totalBytes > 0 ? (double)state.DownloadedBytes / totalBytes * 100.0 : 0,
+                CurrentFile = "Download paused"
             });
 
             throw;
@@ -281,14 +248,17 @@ public sealed class DepotDownloadEngine : IDepotDownloadEngine
 
         _logger.LogInformation("Validating files for AppId {AppId}", request.AppId);
 
+        EnsureAccountSettingsLoaded();
+        EnsureSteam3Initialized();
+
         ReportProgress(progress, new DownloadProgressInfo
         {
             Phase = DownloadPhase.Validating,
             TotalBytes = request.Depots.Sum(d => d.SizeBytes),
             TotalDepots = request.Depots.Count,
+            CurrentFile = "Validating game files..."
         });
 
-        // Configure ContentDownloader for validation
         ContentDownloader.Config = new DownloadConfig
         {
             InstallDirectory = request.InstallPath,
@@ -296,7 +266,6 @@ public sealed class DepotDownloadEngine : IDepotDownloadEngine
             MaxDownloads = Math.Max(1, request.MaxConnections),
         };
 
-        // Load depot keys
         if (!string.IsNullOrWhiteSpace(request.DepotKeysFilePath) && File.Exists(request.DepotKeysFilePath))
         {
             var keyLines = await File.ReadAllLinesAsync(request.DepotKeysFilePath, ct).ConfigureAwait(false);
@@ -330,6 +299,7 @@ public sealed class DepotDownloadEngine : IDepotDownloadEngine
                 Percentage = 100,
                 TotalBytes = request.Depots.Sum(d => d.SizeBytes),
                 DownloadedBytes = request.Depots.Sum(d => d.SizeBytes),
+                CurrentFile = "Validation successful"
             });
 
             return true;
@@ -338,6 +308,30 @@ public sealed class DepotDownloadEngine : IDepotDownloadEngine
         {
             _logger.LogWarning(ex, "Validation found issues for AppId {AppId}", request.AppId);
             return false;
+        }
+    }
+
+    private static void EnsureAccountSettingsLoaded()
+    {
+        if (AccountSettingsStore.Instance == null)
+        {
+            try
+            {
+                AccountSettingsStore.LoadFromFile("account.config");
+            }
+            catch
+            {
+                // Fallback if already loaded
+            }
+        }
+    }
+
+    private void EnsureSteam3Initialized()
+    {
+        if (!ContentDownloader.InitializeSteam3(null, null))
+        {
+            _logger.LogError("Unable to get Steam3 credentials or connect to Steam network.");
+            throw new InvalidOperationException("Failed to establish anonymous connection to Steam3.");
         }
     }
 

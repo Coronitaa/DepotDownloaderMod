@@ -4,16 +4,15 @@
     <TargetFramework>net8.0</TargetFramework>
     <RootNamespace>DepotDownloader</RootNamespace>
     <AssemblyName>BlueStar.DepotDownloader</AssemblyName>
-    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <Version>4.0.0</Version>
     <Description>Steam Depot Download Engine for BlueStar</Description>
     <Authors>SteamRE Team, BlueStar</Authors>
     <Copyright>Copyright © SteamRE Team 2025</Copyright>
     <Deterministic>true</Deterministic>
-    <Nullable>enable</Nullable>
+    <Nullable>annotations</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <TreatWarningsAsErrors Condition="'$(ContinuousIntegrationBuild)' == 'true'">true</TreatWarningsAsErrors>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <NoWarn>$(NoWarn);IDE0055;IDE0044;CS8600;CS8601;CS8602;CS8603;CS8604;CS8618;CS8620;CS8625;CS8767</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

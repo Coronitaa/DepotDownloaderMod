@@ -154,78 +154,79 @@ public sealed class DepotDownloadEngine : IDepotDownloadEngine
                 .Select(d => (d.DepotId, d.ManifestId))
                 .ToList();
 
-            // Perform actual download of all depots
-            ReportProgress(progress, new DownloadProgressInfo
-            {
-                Phase = DownloadPhase.Downloading,
-                TotalBytes = totalBytes,
-                TotalDepots = request.Depots.Count,
-                Percentage = 5.0,
-                CurrentFile = "Downloading content..."
-            });
+            // Setup real-time progress hook
+            long lastReportedTicks = 0;
+            var speedWindow = new Queue<(long ticks, long bytes)>();
+            var writeWindow = new Queue<(long ticks, long bytes)>();
 
-            long lastReportTicks = Stopwatch.GetTimestamp();
-            long lastDownloadedBytes = 0;
-            long lastWrittenBytes = 0;
-            double currentDownloadSpeed = 0;
-            double currentWriteSpeed = 0;
-
-            ContentDownloader.ProgressCallback = (depotId, bytesDownloaded, totalDownloadSize, currentFile, bytesWritten, connections, doneChunks, totalChunks) =>
+            ContentDownloader.ProgressCallback = (downloadedUncompressed, totalUncompressed, networkBytes, currentFile) =>
             {
                 var nowTicks = Stopwatch.GetTimestamp();
-                var elapsedSec = (double)(nowTicks - lastReportTicks) / Stopwatch.Frequency;
+                var total = totalUncompressed > 0 ? (long)totalUncompressed : totalBytes;
+                var downloaded = (long)downloadedUncompressed;
 
-                if (elapsedSec >= 0.3) // Throttle updates to ~300ms for smooth UI feedback
+                lock (speedWindow)
                 {
-                    var downloadedDelta = (long)bytesDownloaded - lastDownloadedBytes;
-                    var writtenDelta = (long)bytesWritten - lastWrittenBytes;
+                    speedWindow.Enqueue((nowTicks, (long)networkBytes));
+                    writeWindow.Enqueue((nowTicks, downloaded));
 
-                    if (downloadedDelta > 0 && elapsedSec > 0)
+                    // Keep samples from last 4 seconds for smooth rate calculation
+                    var cutoff = nowTicks - (long)(4.0 * Stopwatch.Frequency);
+                    while (speedWindow.Count > 2 && speedWindow.Peek().ticks < cutoff)
+                        speedWindow.Dequeue();
+                    while (writeWindow.Count > 2 && writeWindow.Peek().ticks < cutoff)
+                        writeWindow.Dequeue();
+
+                    long netSpeed = 0;
+                    if (speedWindow.Count >= 2)
                     {
-                        var instantSpeed = downloadedDelta / elapsedSec;
-                        currentDownloadSpeed = currentDownloadSpeed <= 0 ? instantSpeed : (currentDownloadSpeed * 0.7 + instantSpeed * 0.3);
+                        var first = speedWindow.Peek();
+                        var last = speedWindow.Last();
+                        var elapsedSec = (double)(last.ticks - first.ticks) / Stopwatch.Frequency;
+                        if (elapsedSec > 0.05)
+                            netSpeed = (long)((last.bytes - first.bytes) / elapsedSec);
                     }
 
-                    if (writtenDelta > 0 && elapsedSec > 0)
+                    long writeSpeed = 0;
+                    if (writeWindow.Count >= 2)
                     {
-                        var instantWrite = writtenDelta / elapsedSec;
-                        currentWriteSpeed = currentWriteSpeed <= 0 ? instantWrite : (currentWriteSpeed * 0.7 + instantWrite * 0.3);
+                        var first = writeWindow.Peek();
+                        var last = writeWindow.Last();
+                        var elapsedSec = (double)(last.ticks - first.ticks) / Stopwatch.Frequency;
+                        if (elapsedSec > 0.05)
+                            writeSpeed = (long)((last.bytes - first.bytes) / elapsedSec);
                     }
 
-                    lastReportTicks = nowTicks;
-                    lastDownloadedBytes = (long)bytesDownloaded;
-                    lastWrittenBytes = (long)bytesWritten;
-
-                    var effectiveTotal = totalDownloadSize > 0 ? (long)totalDownloadSize : totalBytes;
-                    var pct = effectiveTotal > 0 ? Math.Min(99.9, (double)bytesWritten / effectiveTotal * 100.0) : 0;
-
-                    TimeSpan? eta = null;
-                    if (currentDownloadSpeed > 0 && effectiveTotal > (long)bytesWritten)
+                    var timeSinceLastReport = (double)(nowTicks - lastReportedTicks) / Stopwatch.Frequency;
+                    if (timeSinceLastReport >= 0.25 || downloaded >= total)
                     {
-                        var remainingBytes = effectiveTotal - (long)bytesWritten;
-                        eta = TimeSpan.FromSeconds(remainingBytes / currentDownloadSpeed);
+                        lastReportedTicks = nowTicks;
+
+                        TimeSpan? eta = null;
+                        if (netSpeed > 0 && total > downloaded)
+                        {
+                            var remainingBytes = total - downloaded;
+                            eta = TimeSpan.FromSeconds((double)remainingBytes / netSpeed);
+                        }
+
+                        var pct = total > 0 ? Math.Min(99.9, (double)downloaded / total * 100.0) : 0.0;
+
+                        state.DownloadedBytes = downloaded;
+                        state.TotalBytes = total;
+
+                        ReportProgress(progress, new DownloadProgressInfo
+                        {
+                            Phase = DownloadPhase.Downloading,
+                            TotalBytes = total,
+                            DownloadedBytes = downloaded,
+                            Percentage = pct,
+                            DownloadBytesPerSec = Math.Max(0, netSpeed),
+                            WriteBytesPerSec = Math.Max(0, writeSpeed),
+                            EstimatedTimeRemaining = eta,
+                            CurrentFile = Path.GetFileName(currentFile) ?? currentFile,
+                            TotalDepots = request.Depots.Count,
+                        });
                     }
-
-                    // Update state snapshot
-                    state.DownloadedBytes = (long)bytesWritten;
-                    state.TotalBytes = effectiveTotal;
-
-                    ReportProgress(progress, new DownloadProgressInfo
-                    {
-                        DepotId = depotId,
-                        ManifestId = request.Depots.FirstOrDefault(d => d.DepotId == depotId)?.ManifestId ?? 0,
-                        Phase = DownloadPhase.Downloading,
-                        TotalBytes = effectiveTotal,
-                        DownloadedBytes = (long)bytesWritten,
-                        WrittenBytes = (long)bytesWritten,
-                        DownloadBytesPerSec = currentDownloadSpeed,
-                        WriteBytesPerSec = currentWriteSpeed,
-                        Percentage = pct,
-                        CurrentFile = currentFile,
-                        ActiveConnections = connections,
-                        EstimatedTimeRemaining = eta,
-                        TotalDepots = request.Depots.Count,
-                    });
                 }
             };
 

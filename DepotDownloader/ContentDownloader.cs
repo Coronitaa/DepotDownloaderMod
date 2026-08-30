@@ -30,22 +30,11 @@ namespace DepotDownloader
 
         private static Steam3Session steam3;
         private static CDNClientPool cdnPool;
+        public static Action<ulong, ulong, ulong, string>? ProgressCallback;
 
         private const string DEFAULT_DOWNLOAD_DIR = "depots";
         private const string CONFIG_DIR = ".DepotDownloader";
         private static readonly string STAGING_DIR = Path.Combine(CONFIG_DIR, "staging");
-
-        public delegate void ContentDownloadProgressDelegate(
-            uint depotId,
-            ulong bytesDownloaded,
-            ulong totalBytes,
-            string currentFileName,
-            ulong bytesWritten,
-            int activeConnections,
-            int completedChunks,
-            int totalChunks);
-
-        public static ContentDownloadProgressDelegate? ProgressCallback;
 
         private sealed class DepotDownloadInfo(
             uint depotid, uint appId, ulong manifestId, string branch,
@@ -1410,17 +1399,11 @@ namespace DepotDownloader
                 downloadCounter.totalBytesUncompressed += chunk.UncompressedLength;
 
                 Ansi.Progress(downloadCounter.totalBytesUncompressed, downloadCounter.completeDownloadSize);
-
                 ProgressCallback?.Invoke(
-                    depot.DepotId,
-                    downloadCounter.totalBytesCompressed,
-                    downloadCounter.completeDownloadSize,
-                    file.FileName,
                     downloadCounter.totalBytesUncompressed,
-                    Config.MaxDownloads,
-                    0,
-                    0
-                );
+                    downloadCounter.completeDownloadSize,
+                    downloadCounter.totalBytesCompressed,
+                    file.FileName);
             }
 
             if (remainingChunks == 0)

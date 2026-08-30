@@ -164,16 +164,88 @@ public sealed class DepotDownloadEngine : IDepotDownloadEngine
                 CurrentFile = "Downloading content..."
             });
 
-            await ContentDownloader.DownloadAppAsync(
-                request.AppId,
-                depotManifestPairs,
-                ContentDownloader.DEFAULT_BRANCH,
-                null,
-                null,
-                null,
-                false,
-                false
-            ).ConfigureAwait(false);
+            long lastReportTicks = Stopwatch.GetTimestamp();
+            long lastDownloadedBytes = 0;
+            long lastWrittenBytes = 0;
+            double currentDownloadSpeed = 0;
+            double currentWriteSpeed = 0;
+
+            ContentDownloader.ProgressCallback = (depotId, bytesDownloaded, totalDownloadSize, currentFile, bytesWritten, connections, doneChunks, totalChunks) =>
+            {
+                var nowTicks = Stopwatch.GetTimestamp();
+                var elapsedSec = (double)(nowTicks - lastReportTicks) / Stopwatch.Frequency;
+
+                if (elapsedSec >= 0.3) // Throttle updates to ~300ms for smooth UI feedback
+                {
+                    var downloadedDelta = (long)bytesDownloaded - lastDownloadedBytes;
+                    var writtenDelta = (long)bytesWritten - lastWrittenBytes;
+
+                    if (downloadedDelta > 0 && elapsedSec > 0)
+                    {
+                        var instantSpeed = downloadedDelta / elapsedSec;
+                        currentDownloadSpeed = currentDownloadSpeed <= 0 ? instantSpeed : (currentDownloadSpeed * 0.7 + instantSpeed * 0.3);
+                    }
+
+                    if (writtenDelta > 0 && elapsedSec > 0)
+                    {
+                        var instantWrite = writtenDelta / elapsedSec;
+                        currentWriteSpeed = currentWriteSpeed <= 0 ? instantWrite : (currentWriteSpeed * 0.7 + instantWrite * 0.3);
+                    }
+
+                    lastReportTicks = nowTicks;
+                    lastDownloadedBytes = (long)bytesDownloaded;
+                    lastWrittenBytes = (long)bytesWritten;
+
+                    var effectiveTotal = totalDownloadSize > 0 ? (long)totalDownloadSize : totalBytes;
+                    var pct = effectiveTotal > 0 ? Math.Min(99.9, (double)bytesWritten / effectiveTotal * 100.0) : 0;
+
+                    TimeSpan? eta = null;
+                    if (currentDownloadSpeed > 0 && effectiveTotal > (long)bytesWritten)
+                    {
+                        var remainingBytes = effectiveTotal - (long)bytesWritten;
+                        eta = TimeSpan.FromSeconds(remainingBytes / currentDownloadSpeed);
+                    }
+
+                    // Update state snapshot
+                    state.DownloadedBytes = (long)bytesWritten;
+                    state.TotalBytes = effectiveTotal;
+
+                    ReportProgress(progress, new DownloadProgressInfo
+                    {
+                        DepotId = depotId,
+                        ManifestId = request.Depots.FirstOrDefault(d => d.DepotId == depotId)?.ManifestId ?? 0,
+                        Phase = DownloadPhase.Downloading,
+                        TotalBytes = effectiveTotal,
+                        DownloadedBytes = (long)bytesWritten,
+                        WrittenBytes = (long)bytesWritten,
+                        DownloadBytesPerSec = currentDownloadSpeed,
+                        WriteBytesPerSec = currentWriteSpeed,
+                        Percentage = pct,
+                        CurrentFile = currentFile,
+                        ActiveConnections = connections,
+                        EstimatedTimeRemaining = eta,
+                        TotalDepots = request.Depots.Count,
+                    });
+                }
+            };
+
+            try
+            {
+                await ContentDownloader.DownloadAppAsync(
+                    request.AppId,
+                    depotManifestPairs,
+                    ContentDownloader.DEFAULT_BRANCH,
+                    null,
+                    null,
+                    null,
+                    false,
+                    false
+                ).ConfigureAwait(false);
+            }
+            finally
+            {
+                ContentDownloader.ProgressCallback = null;
+            }
 
             // Mark all depots complete in state
             foreach (var d in state.Depots)

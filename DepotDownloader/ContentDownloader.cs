@@ -35,6 +35,18 @@ namespace DepotDownloader
         private const string CONFIG_DIR = ".DepotDownloader";
         private static readonly string STAGING_DIR = Path.Combine(CONFIG_DIR, "staging");
 
+        public delegate void ContentDownloadProgressDelegate(
+            uint depotId,
+            ulong bytesDownloaded,
+            ulong totalBytes,
+            string currentFileName,
+            ulong bytesWritten,
+            int activeConnections,
+            int completedChunks,
+            int totalChunks);
+
+        public static ContentDownloadProgressDelegate? ProgressCallback;
+
         private sealed class DepotDownloadInfo(
             uint depotid, uint appId, ulong manifestId, string branch,
             string installDir, byte[] depotKey)
@@ -1398,6 +1410,17 @@ namespace DepotDownloader
                 downloadCounter.totalBytesUncompressed += chunk.UncompressedLength;
 
                 Ansi.Progress(downloadCounter.totalBytesUncompressed, downloadCounter.completeDownloadSize);
+
+                ProgressCallback?.Invoke(
+                    depot.DepotId,
+                    downloadCounter.totalBytesCompressed,
+                    downloadCounter.completeDownloadSize,
+                    file.FileName,
+                    downloadCounter.totalBytesUncompressed,
+                    Config.MaxDownloads,
+                    0,
+                    0
+                );
             }
 
             if (remainingChunks == 0)

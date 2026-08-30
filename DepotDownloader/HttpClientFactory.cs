@@ -14,18 +14,21 @@ namespace DepotDownloader
     // We don't know if the IPv6 stack is functional.
     class HttpClientFactory
     {
-        public static HttpClient CreateHttpClient()
+        private static readonly Lazy<HttpClient> _instance = new(() =>
         {
             var client = new HttpClient(new SocketsHttpHandler
             {
-                ConnectCallback = IPv4ConnectAsync
+                ConnectCallback = IPv4ConnectAsync,
+                PooledConnectionLifetime = TimeSpan.FromMinutes(10)
             });
 
             var assemblyVersion = typeof(HttpClientFactory).Assembly.GetName().Version.ToString(fieldCount: 3);
             client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("DepotDownloader", assemblyVersion));
 
             return client;
-        }
+        });
+
+        public static HttpClient CreateHttpClient() => _instance.Value;
 
         static async ValueTask<Stream> IPv4ConnectAsync(SocketsHttpConnectionContext context, CancellationToken cancellationToken)
         {

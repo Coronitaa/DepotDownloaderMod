@@ -100,14 +100,23 @@ namespace DepotDownloader
         public static byte[] AdlerHash(Stream stream, int length)
         {
             uint a = 0, b = 0;
-            for (var i = 0; i < length; i++)
+            var buffer = new byte[8192];
+            var remaining = length;
+            
+            while (remaining > 0)
             {
-                var c = (uint)stream.ReadByte();
-
-                a = (a + c) % 65521;
-                b = (b + a) % 65521;
+                var toRead = Math.Min(buffer.Length, remaining);
+                var bytesRead = stream.Read(buffer, 0, toRead);
+                if (bytesRead == 0) break;
+                
+                for (var i = 0; i < bytesRead; i++)
+                {
+                    a = (a + buffer[i]) % 65521;
+                    b = (b + a) % 65521;
+                }
+                remaining -= bytesRead;
             }
-
+            
             return BitConverter.GetBytes(a | (b << 16));
         }
 
@@ -199,7 +208,7 @@ namespace DepotDownloader
                 File.WriteAllBytes(filename + ".sha", FileSHAHash(filename));
                 return true; // If serialization completes without throwing an exception, return true
             }
-            catch (Exception)
+            catch (IOException)
             {
                 return false; // Return false if an error occurs
             }
@@ -209,14 +218,8 @@ namespace DepotDownloader
         {
             if (hex == null)
                 return null;
-
-            var chars = hex.Length;
-            var bytes = new byte[chars / 2];
-
-            for (var i = 0; i < chars; i += 2)
-                bytes[i / 2] = Convert.ToByte(hex.Substring(i, 2), 16);
-
-            return bytes;
+            
+            return Convert.FromHexString(hex);
         }
 
         /// <summary>

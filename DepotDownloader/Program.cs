@@ -171,6 +171,8 @@ namespace DepotDownloader
 
             ContentDownloader.Config.VerifyAll = HasParameter(args, "-verify-all") || HasParameter(args, "-verify_all") || HasParameter(args, "-validate");
 
+            ContentDownloader.Config.MaxDownloads = GetParameter(args, "-max-downloads", 8);
+
             if (HasParameter(args, "-use-lancache"))
             {
                 await Client.DetectLancacheServerAsync();
@@ -186,8 +188,6 @@ namespace DepotDownloader
                     }
                 }
             }
-
-            ContentDownloader.Config.MaxDownloads = GetParameter(args, "-max-downloads", 8);
             ContentDownloader.Config.LoginID = HasParameter(args, "-loginid") ? GetParameter<uint>(args, "-loginid") : null;
             ContentDownloader.Config.UseManifestFile = HasParameter(args, "-manifestfile");
             ContentDownloader.Config.ManifestFile = GetParameter<string>(args, "-manifestfile");

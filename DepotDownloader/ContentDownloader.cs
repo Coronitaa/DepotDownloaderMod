@@ -75,8 +75,9 @@ namespace DepotDownloader
                     Directory.CreateDirectory(Path.Combine(installDir, STAGING_DIR));
                 }
             }
-            catch
+            catch (IOException ex)
             {
+                Console.Error.WriteLine($"Failed to create directory structure: {ex.Message}");
                 return false;
             }
 
@@ -588,7 +589,7 @@ namespace DepotDownloader
             if (DepotKeyStore.ContainsKey(depotId))
             {
                 depotKey = DepotKeyStore.Get(depotId);
-                steam3.DepotKeys.Add(depotId,depotKey);
+                steam3.DepotKeys[depotId] = depotKey;
             }
             else
             {

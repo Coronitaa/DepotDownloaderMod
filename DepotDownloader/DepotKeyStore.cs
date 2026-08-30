@@ -2,14 +2,14 @@
 // in file 'LICENSE', which is part of this source code package.
 
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Linq;
 
 namespace DepotDownloader
 {
     static class DepotKeyStore
     {
-        private static Dictionary<uint, byte[]> depotKeysCache = new Dictionary<uint, byte[]>();
+        private static ConcurrentDictionary<uint, byte[]> depotKeysCache = new ConcurrentDictionary<uint, byte[]>();
 
         public static void AddAll(string[] values)
         {
@@ -22,7 +22,7 @@ namespace DepotDownloader
                     throw new FormatException($"Invalid depot key line: {value}");
                 }
 
-                depotKeysCache.Add(uint.Parse(split[0]), StringToByteArray(split[1]));
+                depotKeysCache[uint.Parse(split[0])] = StringToByteArray(split[1]);
             }
         }
 
@@ -41,7 +41,13 @@ namespace DepotDownloader
 
         public static byte[] Get(uint depotId)
         {
-            return depotKeysCache[depotId];
+            depotKeysCache.TryGetValue(depotId, out var key);
+            return key;
+        }
+
+        public static void Add(uint depotId, byte[] key)
+        {
+            depotKeysCache[depotId] = key;
         }
 
 

@@ -941,6 +941,15 @@ namespace DepotDownloader
 
             var filesAfterExclusions = newManifest.Files.AsParallel().Where(f => TestIsFileIncluded(f.FileName)).ToList();
             var allFileNames = new HashSet<string>(filesAfterExclusions.Count);
+            var createdDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void EnsureDir(string? path)
+            {
+                if (!string.IsNullOrEmpty(path) && createdDirs.Add(path))
+                {
+                    try { Directory.CreateDirectory(path); } catch { }
+                }
+            }
 
             // Pre-process
             filesAfterExclusions.ForEach(file =>
@@ -952,14 +961,14 @@ namespace DepotDownloader
 
                 if (file.Flags.HasFlag(EDepotFileFlag.Directory))
                 {
-                    Directory.CreateDirectory(fileFinalPath);
-                    Directory.CreateDirectory(fileStagingPath);
+                    EnsureDir(fileFinalPath);
+                    EnsureDir(fileStagingPath);
                 }
                 else
                 {
                     // Some manifests don't explicitly include all necessary directories
-                    Directory.CreateDirectory(Path.GetDirectoryName(fileFinalPath));
-                    Directory.CreateDirectory(Path.GetDirectoryName(fileStagingPath));
+                    EnsureDir(Path.GetDirectoryName(fileFinalPath));
+                    EnsureDir(Path.GetDirectoryName(fileStagingPath));
 
                     downloadCounter.completeDownloadSize += file.TotalSize;
                     depotCounter.completeDownloadSize += file.TotalSize;
@@ -991,14 +1000,26 @@ namespace DepotDownloader
 
             var parallelOptions = new ParallelOptions
             {
-                MaxDegreeOfParallelism = Config.MaxDownloads,
+                MaxDegreeOfParallelism = Math.Max(Config.MaxDownloads, Environment.ProcessorCount * 2),
                 CancellationToken = cts.Token
             };
+
+            int preparedFiles = 0;
+            int totalFiles = files.Length;
+            long lastProgressReportTick = 0;
 
             await Parallel.ForEachAsync(files, parallelOptions, async (file, cancellationToken) =>
             {
                 await Task.Yield();
                 DownloadSteam3AsyncDepotFile(cts, downloadCounter, depotFilesData, file, networkChunkQueue);
+
+                int done = Interlocked.Increment(ref preparedFiles);
+                var now = Environment.TickCount64;
+                if (now - lastProgressReportTick > 250 || done == totalFiles)
+                {
+                    lastProgressReportTick = now;
+                    ProgressCallback?.Invoke(0, downloadCounter.completeDownloadSize, 0, $"Preparing files: {done:N0} / {totalFiles:N0}...");
+                }
             });
 
             await Parallel.ForEachAsync(networkChunkQueue, parallelOptions, async (q, cancellationToken) =>

@@ -223,7 +223,9 @@ public sealed class DepotDownloadEngine : IDepotDownloadEngine
                             DownloadBytesPerSec = Math.Max(0, netSpeed),
                             WriteBytesPerSec = Math.Max(0, writeSpeed),
                             EstimatedTimeRemaining = eta,
-                            CurrentFile = Path.GetFileName(currentFile) ?? currentFile,
+                            CurrentFile = (currentFile.StartsWith("Preparing") || currentFile.StartsWith("Processing") || currentFile.StartsWith("Allocating")) 
+                                ? currentFile 
+                                : (Path.GetFileName(currentFile) ?? currentFile),
                             TotalDepots = request.Depots.Count,
                         });
                     }

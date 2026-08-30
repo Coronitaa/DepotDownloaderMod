@@ -232,6 +232,8 @@ public sealed class DepotDownloadEngine : IDepotDownloadEngine
 
             try
             {
+                ContentDownloader.CancellationToken = ct;
+
                 await ContentDownloader.DownloadAppAsync(
                     request.AppId,
                     depotManifestPairs,
@@ -245,6 +247,7 @@ public sealed class DepotDownloadEngine : IDepotDownloadEngine
             }
             finally
             {
+                ContentDownloader.CancellationToken = CancellationToken.None;
                 ContentDownloader.ProgressCallback = null;
             }
 

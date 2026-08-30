@@ -31,6 +31,7 @@ namespace DepotDownloader
         private static Steam3Session steam3;
         private static CDNClientPool cdnPool;
         public static Action<ulong, ulong, ulong, string>? ProgressCallback;
+        public static CancellationToken CancellationToken { get; set; } = CancellationToken.None;
 
         private const string DEFAULT_DOWNLOAD_DIR = "depots";
         private const string CONFIG_DIR = ".DepotDownloader";
@@ -694,7 +695,9 @@ namespace DepotDownloader
             ProgressCallback?.Invoke(0, 0, 0, "Retrieving Steam CDN servers...");
             await cdnPool.UpdateServerList();
 
-            var cts = new CancellationTokenSource();
+            using var cts = CancellationToken.CanBeCanceled
+                ? CancellationTokenSource.CreateLinkedTokenSource(CancellationToken)
+                : new CancellationTokenSource();
             var downloadCounter = new GlobalDownloadCounter();
             var depotsToDownload = new List<DepotFilesData>(depots.Count);
             var allFileNamesAllDepots = new HashSet<string>();

@@ -600,15 +600,11 @@ namespace DepotDownloader
                     Console.WriteLine("Lost connection to Steam. Reconnecting");
                 }
 
-                var backoff = connectionBackoff;
-                Task.Run(async () =>
-                {
-                    await Task.Delay(1000 * backoff);
+                Thread.Sleep(1000 * connectionBackoff);
 
-                    // Any connection related flags need to be reset here to match the state after Connect
-                    ResetConnectionFlags();
-                    steamClient.Connect();
-                });
+                // Any connection related flags need to be reset here to match the state after Connect
+                ResetConnectionFlags();
+                steamClient.Connect();
             }
         }
 

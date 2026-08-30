@@ -326,17 +326,7 @@ namespace DepotDownloader
                 }
             );
 
-            bool loggedOn = false;
-            for (int i = 0; i < 5 && !loggedOn; i++)
-            {
-                loggedOn = steam3.WaitForCredentials();
-                if (!loggedOn && !steam3.IsAborted)
-                {
-                    Thread.Sleep(500);
-                }
-            }
-
-            if (!loggedOn)
+            if (!steam3.WaitForCredentials())
             {
                 Console.WriteLine("Unable to get steam3 credentials.");
                 ShutdownSteam3();
@@ -701,6 +691,7 @@ namespace DepotDownloader
         private static async Task DownloadSteam3Async(List<DepotDownloadInfo> depots)
         {
             Ansi.Progress(Ansi.ProgressState.Indeterminate);
+            ProgressCallback?.Invoke(0, 0, 0, "Retrieving Steam CDN servers...");
             await cdnPool.UpdateServerList();
 
             var cts = new CancellationTokenSource();
@@ -711,6 +702,7 @@ namespace DepotDownloader
             // First, fetch all the manifests for each depot (including previous manifests) and perform the initial setup
             foreach (var depot in depots)
             {
+                ProgressCallback?.Invoke(0, 0, 0, $"Processing manifest for depot {depot.DepotId}...");
                 var depotFileData = await ProcessDepotManifestAndFiles(cts, depot, downloadCounter);
 
                 if (depotFileData != null)

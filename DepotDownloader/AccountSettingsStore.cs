@@ -46,8 +46,8 @@ namespace DepotDownloader
 
         public static void LoadFromFile(string filename)
         {
-            if (Loaded)
-                throw new Exception("Config already loaded");
+            if (Loaded && Instance.FileName == filename)
+                return;
 
             if (IsolatedStorage.FileExists(filename))
             {
@@ -55,9 +55,9 @@ namespace DepotDownloader
                 {
                     using var fs = IsolatedStorage.OpenFile(filename, FileMode.Open, FileAccess.Read);
                     using var ds = new DeflateStream(fs, CompressionMode.Decompress);
-                    Instance = Serializer.Deserialize<AccountSettingsStore>(ds);
+                    Instance = Serializer.Deserialize<AccountSettingsStore>(ds) ?? new AccountSettingsStore();
                 }
-                catch (IOException ex)
+                catch (Exception ex)
                 {
                     Console.WriteLine("Failed to load account settings: {0}", ex.Message);
                     Instance = new AccountSettingsStore();
@@ -73,8 +73,8 @@ namespace DepotDownloader
 
         public static void Save()
         {
-            if (!Loaded)
-                throw new Exception("Saved config before loading");
+            if (!Loaded || string.IsNullOrWhiteSpace(Instance.FileName))
+                return;
 
             try
             {
@@ -82,7 +82,7 @@ namespace DepotDownloader
                 using var ds = new DeflateStream(fs, CompressionMode.Compress);
                 Serializer.Serialize(ds, Instance);
             }
-            catch (IOException ex)
+            catch (Exception ex)
             {
                 Console.WriteLine("Failed to save account settings: {0}", ex.Message);
             }

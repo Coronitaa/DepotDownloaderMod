@@ -31,14 +31,22 @@ namespace DepotDownloader
 
         public static void LoadFromFile(string filename)
         {
-            if (Loaded)
-                throw new Exception("Config already loaded");
+            if (Loaded && Instance.FileName == filename)
+                return;
 
             if (File.Exists(filename))
             {
-                using var fs = File.Open(filename, FileMode.Open);
-                using var ds = new DeflateStream(fs, CompressionMode.Decompress);
-                Instance = Serializer.Deserialize<DepotConfigStore>(ds);
+                try
+                {
+                    using var fs = File.Open(filename, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    using var ds = new DeflateStream(fs, CompressionMode.Decompress);
+                    Instance = Serializer.Deserialize<DepotConfigStore>(ds) ?? new DepotConfigStore();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Failed to load depot config: {0}", ex.Message);
+                    Instance = new DepotConfigStore();
+                }
             }
             else
             {
@@ -50,12 +58,25 @@ namespace DepotDownloader
 
         public static void Save()
         {
-            if (!Loaded)
-                throw new Exception("Saved config before loading");
+            if (!Loaded || string.IsNullOrWhiteSpace(Instance.FileName))
+                return;
 
-            using var fs = File.Open(Instance.FileName, FileMode.Create);
-            using var ds = new DeflateStream(fs, CompressionMode.Compress);
-            Serializer.Serialize(ds, Instance);
+            try
+            {
+                var dir = Path.GetDirectoryName(Instance.FileName);
+                if (!string.IsNullOrWhiteSpace(dir) && !Directory.Exists(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+
+                using var fs = File.Open(Instance.FileName, FileMode.Create, FileAccess.Write, FileShare.None);
+                using var ds = new DeflateStream(fs, CompressionMode.Compress);
+                Serializer.Serialize(ds, Instance);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Failed to save depot config: {0}", ex.Message);
+            }
         }
     }
 }

@@ -1,94 +1,225 @@
-DepotDownloaderMod
-===============
-IMPROTANT: This Tool require a manifest file to work Due to GetManifestRequestCode Verification.
+# DepotDownloaderMod 🚀
 
-Steam depot downloader utilizing the SteamKit2 library with depot keys support and many other features. Supports .NET 9.0  
+[![.NET Version](https://img.shields.io/badge/.NET-8.0%20%7C%209.0-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Powered by BlueStar](https://img.shields.io/badge/Integrated%20in-BlueStar-00d2ff?logo=steam&logoColor=white)](https://github.com/Coronitaa/BlueStar)
 
-Works with keys from SteamTools:  
+An enhanced, high-performance Steam depot and workshop downloader built on top of [SteamKit2](https://github.com/SteamRE/SteamKit). **DepotDownloaderMod** extends the capabilities of standard depot downloaders with support for external `.manifest` files (bypassing `GetManifestRequestCode` restrictions), custom depot decryption keys, access tokens, and an **embeddable C# engine architecture** designed for modern graphical game managers.
 
-https://bbs.steamtools.net/forum.php?mod=viewthread&tid=44&highlight=%E5%A4%A7%E5%AE%B6  
-https://bbs.steamtools.net/forum.php?mod=viewthread&tid=16&highlight=%E5%A4%A7%E5%AE%B6  
+---
 
-* Update: Added `Scripts\storage_depotdownloadermod.py` to generate a bat file to download with depot keys and manifests from Many depot libraries.
+## 🌟 Key Features
 
-* Update: You can decrypt the latest manifest in [https://youxiou.com/thread-3.htm](https://youxiou.com/thread-3.htm)
+- 🔑 **Depot Keys Support**: Supply external depot decryption keys via file (`-depotkeys`) in `depotId;hexKey` format.
+- 📦 **External Manifest Bypassing**: Download depots using locally provided `.manifest` files (`-manifestfile`) without requiring Steam server manifest code verification.
+- 🎟️ **Access Tokens**: Support for `-apptoken` and `-packagetoken` for authorized depot queries.
+- 🧩 **Steam Workshop Support**: Download UGC items and Published Files with a single command (`-pubfile` or `-ugc`).
+- ⚡ **High-Throughput Concurrent Engine**: Multi-threaded chunk downloading with configurable connection concurrency (`-max-downloads`) and local LanCache routing (`-use-lancache`).
+- 🖥️ **Embeddable Library Engine**: Includes `IDepotDownloadEngine`, `DepotDownloadRequest`, and real-time progress callbacks for seamless integration into C# / .NET desktop applications.
+- 🌐 **Multi-Platform**: Full support for Windows, Linux, and macOS with OS and architecture-specific depot filtering.
 
-### Downloading one or all depots for an app with depot keys and manifest file
+---
 
-```(text)
-dotnet DepotDownloader.dll -app <id> -depotkeys <depotkeysfile> [-depot <id> [-manifest <id>]] -manifestfile <manifestfile>
+## 🎮 BlueStar Integration
+
+**DepotDownloaderMod** serves as the core downloading and depot staging engine for **[BlueStar](https://github.com/Coronitaa/BlueStar)** — the modern open-source desktop game manager and launcher.
+
+### What BlueStar provides on top of DepotDownloaderMod:
+- 🖥️ **Modern Desktop GUI**: Manage your library with real-time download progress, pause/resume, and queue orchestration.
+- 📦 **1-Click Depot ZIP Package Importer**: Drag & drop `.zip` depot archives (from cs.rin.ru, DepotBox, etc.) to automatically extract manifests, configure depot keys, and detect game Build IDs.
+- 🎮 **Game Build & Branch Versioning**: Seamlessly switch between historical game versions (e.g. for compatibility with specific game fixes, bypasses, or mod layers).
+- 🔓 **Automated Emulator & DLC Layers**: Integrated deployment for CreamAPI, SmokeAPI, Goldberg, and custom game fixes.
+
+👉 Check out the full desktop client at **[Coronitaa/BlueStar](https://github.com/Coronitaa/BlueStar)**!
+
+---
+
+## 🚀 Quick Start
+
+### Requirements
+- [.NET 8.0 Runtime or SDK](https://dotnet.microsoft.com/download/dotnet/8.0) (or [.NET 9.0](https://dotnet.microsoft.com/download/dotnet/9.0))
+
+### Building from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/Coronitaa/DepotDownloaderMod.git
+cd DepotDownloaderMod
+
+# Build Release binary
+dotnet build DepotDownloaderMod.sln -c Release
 ```
 
-For example: `dotnet DepotDownloader.dll -app 730 -depot 731 -manifest 7617088375292372759 -depotkeys steam.keys -apptoken 1234567890123456789 -manifestfile 730_7617088375292372759.manifest`
+The executable will be located in `DepotDownloader/bin/Release/net8.0/`.
 
-By default it will use anonymous account ([view which apps are available on it here](https://steamdb.info/sub/17906/)).
+---
 
-To use your account, specify the `-username <username>` parameter. Password will be asked interactively if you do
-not use specify the `-password` parameter.
+## 📖 Usage Examples
 
-### Downloading a workshop item using pubfile id
-```powershell
-./DepotDownloader -app <id> -pubfile <id> [-username <username> [-password <password>]]
+### 1. Download Depots with External Manifest and Keys
+Download a specific depot using an external `.manifest` file and a `depotkeys.txt` decryption file:
+
+```bash
+dotnet DepotDownloader.dll -app <AppID> -depot <DepotID> -manifest <ManifestID> -manifestfile <path/to/manifest.manifest> -depotkeys <path/to/depotkeys.txt>
 ```
 
-For example: `./DepotDownloadermod -app 730 -pubfile 1885082371`
-
-### Downloading a workshop item using ugc id
-```powershell
-./DepotDownloader -app <id> -ugc <id> [-username <username> [-password <password>]]
+**Example:**
+```bash
+dotnet DepotDownloader.dll -app 730 -depot 731 -manifest 7617088375292372759 -manifestfile 730_7617088375292372759.manifest -depotkeys keys.txt -dir ./csgo_depot
 ```
 
-For example: `./DepotDownloadermod -app 730 -ugc 770604181014286929`
+### 2. Download Game Depots with Authenticated Account
+For apps requiring ownership verification, log in with your Steam credentials (supports Steam Mobile 2FA and QR Code):
 
-## Parameters
+```bash
+# Interactive password & mobile 2FA prompt
+dotnet DepotDownloader.dll -app 730 -username your_username -remember-password
 
-Parameter               | Description
------------------------ | -----------
-`-app <#>`				| the AppID to download.
-`-depot <#>`			| the DepotID to download.
-`-manifest <id>`		| manifest id of content to download (requires `-depot`, default: current for branch).
-`-ugc <#>`				| the UGC ID to download.
-`-branch <branchname>`	| download from specified branch if available (default: Public).
-`-branchpassword <pass>`| branch password if applicable.
-`-all-platforms`		| downloads all platform-specific depots when `-app` is used.
-`-os <os>`				| the operating system for which to download the game (windows, macos or linux, default: OS the program is currently running on)
-`-osarch <arch>`		| the architecture for which to download the game (32 or 64, default: the host's architecture)
-`-all-archs`			| download all architecture-specific depots when `-app` is used.
-`-all-languages`		| download all language-specific depots when `-app` is used.
-`-language <lang>`		| the language for which to download the game (default: english)
-`-lowviolence`			| download low violence depots when `-app` is used.
-`-pubfile <#>`			| the PublishedFileId to download. (Will automatically resolve to UGC id)
-`-username <user>`		| the username of the account to login to for restricted content.
-`-password <pass>`		| the password of the account to login to for restricted content.
-`-qr`                   | display a login QR code to be scanned with the Steam mobile app
-`-no-mobile`            | prefer entering a 2FA code instead of prompting to accept in the Steam mobile app.
-`-remember-password`	| if set, remember the password for subsequent logins of this user. (Use `-username <username> -remember-password` as login credentials)
-`-depotkeys <depotkeysfile>`  | a list of depot keys to use ('depotID;hexKey' per line)
-`-manifestfile <manifestfile>`| Use Specified Manifest file from Steam.
-`-apptoken <apptoken>`        | Use Specified App Access Token
-`-packagetoken <packagetoken>`| Use Specified Package Access Token
-`-dir <installdir>`     | the directory in which to place downloaded files.
-`-filelist <file.txt>`	| the name of a local file that contains a list of files to download (from the manifest). prefix file path with `regex:` if you want to match with regex. each file path should be on their own line.
-`-validate`				| Include checksum verification of files already downloaded.
-`-manifest-only`		| downloads a human readable manifest for any depots that would be downloaded.
-`-cellid <#>`			| the overridden CellID of the content server to download from.
-`-max-downloads <#>`	| maximum number of chunks to download concurrently. (default: 8).
-`-loginid <#>`			| a unique 32-bit integer Steam LogonID in decimal, required if running multiple instances of DepotDownloader concurrently
- `-use-lancache`         | forces downloads over the local network via a Lancache instance.
- `-debug`                | enable verbose debug logging.
- `-V` or `--version`     | print version and runtime.
+# Login with Steam Mobile QR code
+dotnet DepotDownloader.dll -app 730 -username your_username -qr
+```
 
-## Frequently Asked Questions
+### 3. Download a Specific Branch or Beta
+```bash
+dotnet DepotDownloader.dll -app 730 -branch beta_branch -branchpassword branch_pass
+```
 
-### Why am I prompted to enter a 2-factor code every time I run the app?
-Your 2-factor code authenticates a Steam session. You need to "remember" your session with `-remember-password` which persists the login key for your Steam session.
+### 4. Download Steam Workshop Content
+Download items from the Steam Community Workshop using either Pubfile ID or UGC ID:
 
-### Can I run DepotDownloader while an account is already connected to Steam?
-Any connection to Steam will be closed if they share a LoginID. You can specify a different LoginID with `-loginid`.
+```bash
+# Using Published File ID
+dotnet DepotDownloader.dll -app 730 -pubfile 1885082371
 
-### Why doesn't my password containing special characters work? Do I have to specify the password on the command line?
-If you pass the `-password` parameter with a password that contains special characters, you will need to escape the command appropriately for the shell you are using. You do not have to include the `-password` parameter on the command line as long as you include a `-username`. You will be prompted to enter your password interactively.
+# Using UGC ID
+dotnet DepotDownloader.dll -app 730 -ugc 770604181014286929
+```
 
-### Why am I getting slow download speeds and frequent connection timeouts?
-When downloading old builds, cache server may not have the chunks readily available which makes downloading slower.
-Try increasing `-max-downloads` to saturate the network more.
+### 5. Filter by OS, Architecture, or Language
+```bash
+# Download only Windows 64-bit English depots
+dotnet DepotDownloader.dll -app 730 -os windows -osarch 64 -language english
+```
+
+### 6. Filter Specific Files with a Regex Filelist
+```bash
+# Download only executables and DLLs
+dotnet DepotDownloader.dll -app 730 -filelist regex:\.(exe|dll)$
+```
+
+---
+
+## 🛠️ Using DepotDownloaderMod as a C# Library
+
+DepotDownloaderMod provides a high-level API designed for C# applications:
+
+```csharp
+using BlueStar.DepotDownloader;
+
+var engine = new DepotDownloadEngine();
+
+var request = new DepotDownloadRequest
+{
+    AppId = 730,
+    DepotId = 731,
+    ManifestId = 7617088375292372759,
+    ManifestFilePath = @"C:\manifests\730_7617088375292372759.manifest",
+    DepotKeysFilePath = @"C:\keys\depotkeys.txt",
+    InstallDirectory = @"C:\Games\CSGO",
+    MaxDownloads = 16,
+    VerifyFiles = true
+};
+
+var progress = new Progress<DownloadProgressInfo>(info =>
+{
+    Console.WriteLine($"Progress: {info.Percentage:F1}% | Speed: {info.FormattedSpeed} | Downloaded: {info.FormattedBytesDownloaded}");
+});
+
+var result = await engine.DownloadAsync(request, progress, cancellationToken);
+
+if (result.Success)
+{
+    Console.WriteLine("Depot downloaded and verified successfully!");
+}
+```
+
+---
+
+## 📋 Command-Line Parameters Reference
+
+| Parameter | Description |
+| :--- | :--- |
+| `-app <#>` | The Steam Application ID (AppID) to download. |
+| `-depot <#>` | Specific Depot ID to download (if omitted, downloads all relevant depots). |
+| `-manifest <id>` | Target Manifest ID to download (requires `-depot`). |
+| `-manifestfile <file>` | **(Mod Feature)** Path to a local `.manifest` file to bypass Steam server verification. |
+| `-depotkeys <file>` | **(Mod Feature)** Path to a decryption keys file (`depotId;hexKey` per line). |
+| `-apptoken <token>` | **(Mod Feature)** Specify an App Access Token for restricted queries. |
+| `-packagetoken <token>` | **(Mod Feature)** Specify a Package Access Token. |
+| `-dir <path>` | Destination folder for downloaded and staged files. |
+| `-username <user>` | Steam account username for restricted/licensed content. |
+| `-password <pass>` | Steam account password (prompted interactively if omitted). |
+| `-remember-password` | Persists login authentication token for subsequent runs without re-entering credentials. |
+| `-qr` | Displays a login QR code in the terminal to scan with the Steam Mobile App. |
+| `-no-mobile` | Prefer entering numerical 2FA code instead of mobile prompt. |
+| `-pubfile <#>` | PublishedFileId of a Steam Workshop item to download. |
+| `-ugc <#>` | UGC ID of a Steam Workshop item to download. |
+| `-branch <name>` | Branch / beta to download from (default: `public`). |
+| `-branchpassword <p>` | Password for protected private branches. |
+| `-os <os>` | Target operating system (`windows`, `macos`, or `linux`). |
+| `-osarch <arch>` | Target architecture (`32` or `64`). |
+| `-all-platforms` | Download depots for all operating systems. |
+| `-all-languages` | Download depots for all available languages. |
+| `-language <lang>` | Preferred language (default: `english`). |
+| `-filelist <file>` | Path to a text file containing file filters (supports `regex:` prefix). |
+| `-validate` | Validates file integrity and checksums of existing downloaded files. |
+| `-manifest-only` | Generates human-readable depot manifests without downloading content chunks. |
+| `-max-downloads <#>` | Maximum concurrent chunk download threads (default: `8`). |
+| `-use-lancache` | Routes chunk downloads through a local network LanCache instance. |
+| `-loginid <#>` | Unique 32-bit integer Steam LogonID (useful when running multiple concurrent sessions). |
+| `-debug` | Enables verbose debug logging output. |
+| `-V`, `--version` | Displays program version and runtime information. |
+
+---
+
+## 🔑 Depot Keys Format
+
+When using `-depotkeys <file>`, the file should contain one entry per line formatted as:
+
+```text
+<DepotID>;<DecryptionKeyInHex>
+```
+
+**Example `depotkeys.txt`:**
+```text
+731;4E2B1832049BA4E08B39B25032F0A3BC148C01DF91F0314488F7EA9C12822B7A
+732;A718BC39904FE0019C3381B27014498AEB38401C0219EF890473921820468BEF
+```
+
+---
+
+## 🐍 Helper Scripts
+
+The `Scripts/` directory contains helper tools for managing community manifests and depot key databases:
+- `Scripts/storage_depotdownloadermod.py`: Generates batch scripts for downloading multi-depot collections from manifest repositories.
+
+---
+
+## ❓ Frequently Asked Questions
+
+### 1. How do I avoid entering Steam 2FA codes every time?
+Use `-username <your_user> -remember-password`. Once authenticated, SteamKit2 securely caches login tokens so subsequent commands run seamlessly.
+
+### 2. Can I download while logged into the Steam desktop client?
+Yes. Steam will disconnect duplicate sessions sharing the same LogonID. To download simultaneously without conflict, specify a custom LogonID, for example `-loginid 1234`.
+
+### 3. Why are download speeds slow for older game builds?
+Older builds may not be cached on edge CDN nodes. Increase the concurrency factor with `-max-downloads 16` or `-max-downloads 32` to maximize throughput.
+
+---
+
+## ⚖️ License
+
+This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**. See the [LICENSE](LICENSE) file for details.
+
+Steam is a registered trademark of Valve Corporation. This project is not affiliated with or endorsed by Valve Corporation.

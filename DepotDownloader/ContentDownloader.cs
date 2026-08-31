@@ -26,12 +26,35 @@ namespace DepotDownloader
         public const ulong INVALID_MANIFEST_ID = ulong.MaxValue;
         public const string DEFAULT_BRANCH = "public";
 
-        public static DownloadConfig Config = new();
+        private static readonly AsyncLocal<DownloadConfig?> _asyncConfig = new();
+        private static readonly AsyncLocal<Action<ulong, ulong, ulong, string>?> _asyncProgressCallback = new();
+        private static readonly AsyncLocal<CancellationToken> _asyncCancellationToken = new();
+        private static DownloadConfig _globalConfig = new();
 
         private static Steam3Session steam3;
         private static CDNClientPool cdnPool;
-        public static Action<ulong, ulong, ulong, string>? ProgressCallback;
-        public static CancellationToken CancellationToken { get; set; } = CancellationToken.None;
+
+        public static DownloadConfig Config
+        {
+            get => _asyncConfig.Value ?? _globalConfig;
+            set
+            {
+                _asyncConfig.Value = value;
+                _globalConfig = value;
+            }
+        }
+
+        public static Action<ulong, ulong, ulong, string>? ProgressCallback
+        {
+            get => _asyncProgressCallback.Value;
+            set => _asyncProgressCallback.Value = value;
+        }
+
+        public static CancellationToken CancellationToken
+        {
+            get => _asyncCancellationToken.Value;
+            set => _asyncCancellationToken.Value = value;
+        }
 
         private const string DEFAULT_DOWNLOAD_DIR = "depots";
         private const string CONFIG_DIR = ".DepotDownloader";

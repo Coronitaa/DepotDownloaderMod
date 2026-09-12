@@ -416,8 +416,12 @@ namespace DepotDownloader
 
             Ansi.Progress(Ansi.ProgressState.Hidden);
 
-            // flush callbacks until our disconnected event
-            while (!bDidDisconnect)
+            // Flush callbacks until our disconnected event. Bounded: the callback pump was just
+            // cancelled by abortedToken above, so if the disconnect never lands this spins for
+            // ever, and on the way out of the app that turns a close into a hang.
+            var disconnectDeadline = DateTime.UtcNow.AddSeconds(5);
+
+            while (!bDidDisconnect && DateTime.UtcNow < disconnectDeadline)
             {
                 callbacks.RunWaitAllCallbacks(TimeSpan.FromMilliseconds(100));
             }

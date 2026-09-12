@@ -1,4 +1,4 @@
-// This file is subject to the terms and conditions defined
+﻿// This file is subject to the terms and conditions defined
 // in file 'LICENSE', which is part of this source code package.
 
 using System;
@@ -579,16 +579,36 @@ namespace DepotDownloader
             }
 
             var infos = new List<DepotDownloadInfo>();
+            var depotFailures = new List<string>();
 
             foreach (var (depotId, manifestId) in depotManifestIds)
             {
-                var info = await GetDepotInfo(depotId, appId, manifestId, branch);
+                var info = await GetDepotInfo(depotId, appId, manifestId, branch, depotFailures);
                 if (info != null)
                 {
                     infos.Add(info);
                 }
             }
             Console.WriteLine();
+
+            // Every requested depot failed to resolve (no manifest published, no depot key, ...).
+            // Returning normally here made DownloadSteam3Async iterate over an empty list and
+            // complete instantly, so the host reported "downloaded and installed successfully"
+            // for a game of which not a single byte had been fetched. Fail loudly instead.
+            if (infos.Count == 0)
+            {
+                var detail = depotFailures.Count > 0
+                    ? string.Join(" ", depotFailures)
+                    : $"None of the {depotManifestIds.Count} requested depot(s) could be resolved for app {appId}.";
+
+                throw new ContentDownloaderException(
+                    $"No depot could be prepared for app {appId}, so nothing was downloaded. {detail}");
+            }
+
+            if (depotFailures.Count > 0)
+            {
+                Console.WriteLine("Warning: {0} depot(s) were skipped: {1}", depotFailures.Count, string.Join(" ", depotFailures));
+            }
 
             try
             {
@@ -601,7 +621,33 @@ namespace DepotDownloader
             }
         }
 
-        static async Task<DepotDownloadInfo> GetDepotInfo(uint depotId, uint appId, ulong manifestId, string branch)
+        /// <summary>
+        /// Loads a .manifest file that is already on disk without validating its .sha sidecar.
+        /// Used as a last-resort fallback when the CDN cannot serve the manifest any more.
+        /// </summary>
+        static DepotManifest TryLoadLocalManifestIgnoringChecksum(string directory, uint depotId, ulong manifestId)
+        {
+            try
+            {
+                var filename = Path.Combine(directory, string.Format("{0}_{1}.manifest", depotId, manifestId));
+                if (!File.Exists(filename)) return null;
+                if (new FileInfo(filename).Length <= 32) return null;
+
+                var manifest = DepotManifest.LoadFromFile(filename);
+                if (manifest != null)
+                {
+                    try { File.WriteAllBytes(filename + ".sha", Util.FileSHAHash(filename)); } catch { }
+                }
+                return manifest;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Could not load local manifest {0} for depot {1}: {2}", manifestId, depotId, ex.Message);
+                return null;
+            }
+        }
+
+        static async Task<DepotDownloadInfo> GetDepotInfo(uint depotId, uint appId, ulong manifestId, string branch, List<string> failureReasons = null)
         {
             if (steam3 != null && appId != INVALID_APP_ID)
             {
@@ -630,6 +676,7 @@ namespace DepotDownloader
                 if (manifestId == INVALID_MANIFEST_ID)
                 {
                     Console.WriteLine("Depot {0} missing public subsection or manifest section.", depotId);
+                    failureReasons?.Add($"Depot {depotId}: Steam did not publish a manifest for branch '{branch}' (missing public subsection or manifest section).");
                     return null;
                 }
             }
@@ -647,6 +694,7 @@ namespace DepotDownloader
             if (!steam3.DepotKeys.TryGetValue(depotId, out depotKey))
             {
                 Console.WriteLine("No valid depot key for {0}, unable to download.", depotId);
+                failureReasons?.Add($"Depot {depotId}: no valid decryption key is available (Steam refused to hand out the key for this anonymous session and none was supplied by BlueStar).");
                 return null;
             }
 
@@ -655,6 +703,7 @@ namespace DepotDownloader
             if (!CreateDirectories(depotId, uVersion, out var installDir))
             {
                 Console.WriteLine("Error: Unable to create install directories!");
+                failureReasons?.Add($"Depot {depotId}: the install directory could not be created (check the install path and disk permissions).");
                 return null;
             }
 
@@ -738,6 +787,16 @@ namespace DepotDownloader
                 }
 
                 cts.Token.ThrowIfCancellationRequested();
+            }
+
+            // ProcessDepotManifestAndFiles returns null when a depot's manifest could not be
+            // prepared (e.g. filenames could not be decrypted). If that happened to every depot
+            // there is nothing to download, and silently falling through would again be reported
+            // upstream as a successful install.
+            if (depotsToDownload.Count == 0 && depots.Count > 0)
+            {
+                throw new ContentDownloaderException(
+                    "None of the requested depots could be processed: their manifests are missing or their depot keys are invalid. Nothing was downloaded.");
             }
 
             // If we're about to write all the files to the same directory, we will need to first de-duplicate any files by path
@@ -824,9 +883,23 @@ namespace DepotDownloader
                     ulong manifestRequestCode = 0;
                     var manifestRequestCodeExpiration = DateTime.MinValue;
 
+                    // Without a cap, a depot whose CDN keeps returning a generic/transient error
+                    // spun in this loop forever: the retry paths below `continue` without ever
+                    // incrementing anything, so the download appeared frozen at 0% indefinitely.
+                    var manifestAttempts = 0;
+                    const int MAX_MANIFEST_ATTEMPTS = 12;
+                    string manifestFailureDetail = null;
+
                     do
                     {
                         cts.Token.ThrowIfCancellationRequested();
+
+                        if (++manifestAttempts > MAX_MANIFEST_ATTEMPTS)
+                        {
+                            manifestFailureDetail =
+                                $"gave up after {MAX_MANIFEST_ATTEMPTS} attempts against the Steam CDN servers";
+                            break;
+                        }
 
                         Server connection = null;
 
@@ -858,7 +931,12 @@ namespace DepotDownloader
                                 // If we could not get the manifest code, this is a fatal error
                                 if (manifestRequestCode == 0)
                                 {
-                                    cts.Cancel();
+                                    manifestFailureDetail =
+                                        "Steam refused to issue a manifest request code for this depot. " +
+                                        "That means this exact manifest ID is no longer published on this branch, " +
+                                        "or the app is not accessible to an anonymous Steam session";
+                                    cdnPool.ReturnConnection(connection);
+                                    break;
                                 }
                             }
 
@@ -899,12 +977,16 @@ namespace DepotDownloader
                             if (e.StatusCode == HttpStatusCode.Unauthorized || e.StatusCode == HttpStatusCode.Forbidden)
                             {
                                 Console.WriteLine("Encountered {2} for depot manifest {0} {1}. Aborting.", depot.DepotId, depot.ManifestId, (int)e.StatusCode);
+                                manifestFailureDetail =
+                                    $"the CDN rejected the request with HTTP {(int)e.StatusCode} (the depot key is missing or expired, or this content is region restricted)";
                                 break;
                             }
 
                             if (e.StatusCode == HttpStatusCode.NotFound)
                             {
                                 Console.WriteLine("Encountered 404 for depot manifest {0} {1}. Aborting.", depot.DepotId, depot.ManifestId);
+                                manifestFailureDetail =
+                                    "the CDN returned HTTP 404 (this manifest ID has been removed from Steam, which usually means the game was updated and BlueStar is holding an outdated manifest)";
                                 break;
                             }
 
@@ -921,10 +1003,36 @@ namespace DepotDownloader
                         }
                     } while (newManifest == null);
 
+                    // Last resort before failing: BlueStar (or a previous run) may already have
+                    // written this exact manifest next to the install, and only its .sha sidecar
+                    // is missing or stale — which is enough to make LoadManifestFromFile above
+                    // reject a perfectly usable file. Try to load it raw, and only give up if
+                    // that fails too.
+                    if (newManifest == null)
+                    {
+                        newManifest = TryLoadLocalManifestIgnoringChecksum(configDir, depot.DepotId, depot.ManifestId);
+
+                        if (newManifest != null)
+                        {
+                            Console.WriteLine(
+                                "Recovered manifest {0} for depot {1} from the local cache after the CDN download failed.",
+                                depot.ManifestId, depot.DepotId);
+                        }
+                    }
+
                     if (newManifest == null)
                     {
                         Console.WriteLine("\nUnable to download manifest {0} for depot {1}", depot.ManifestId, depot.DepotId);
+                        // Stop sibling depot tasks...
                         cts.Cancel();
+                        // ...but surface this as a FAILURE, not a cancellation. Throwing
+                        // OperationCanceledException here made the host UI report the download as
+                        // "canceled by user" while it had actually failed at 0%.
+                        var reason = manifestFailureDetail
+                            ?? "the manifest is unavailable from every CDN server (missing or expired depot key, region restriction, or the manifest was removed from Steam)";
+
+                        throw new ContentDownloaderException(
+                            $"Unable to download manifest {depot.ManifestId} for depot {depot.DepotId}: {reason}.");
                     }
 
                     // Throw the cancellation exception if requested so that this task is marked failed
@@ -1474,6 +1582,10 @@ namespace DepotDownloader
                 {
                     Console.WriteLine("Failed to find any server with chunk {0} for depot {1}. Aborting.", chunkID, depot.DepotId);
                     cts.Cancel();
+                    // Same reasoning as above: a chunk that no CDN server will serve is a failure,
+                    // not a user cancellation.
+                    throw new ContentDownloaderException(
+                        $"Failed to download chunk {chunkID} for depot {depot.DepotId} from any Steam CDN server.");
                 }
 
                 // Throw the cancellation exception if requested so that this task is marked failed

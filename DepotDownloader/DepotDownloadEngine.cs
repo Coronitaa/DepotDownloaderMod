@@ -253,6 +253,26 @@ public sealed class DepotDownloadEngine : IDepotDownloadEngine
                 ContentDownloader.ProgressCallback = null;
             }
 
+            // Defence in depth: ContentDownloader now throws when it cannot resolve or process a
+            // single depot, but a silent no-op there would once again be reported to the user as a
+            // finished install. If we expected content and the install directory came out empty,
+            // treat it as a failure rather than a success.
+            if (totalBytes > 0)
+            {
+                var installedFiles = Directory.Exists(request.InstallPath)
+                    ? Directory.EnumerateFiles(request.InstallPath, "*", SearchOption.AllDirectories)
+                        .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}.DepotDownloader{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+                        .Any()
+                    : false;
+
+                if (!installedFiles)
+                {
+                    throw new InvalidOperationException(
+                        $"The download for app {request.AppId} finished without writing a single file to \"{request.InstallPath}\". " +
+                        "No depot content could be retrieved — the depot keys or manifests BlueStar holds for this game are missing or outdated.");
+                }
+            }
+
             // Mark all depots complete in state
             foreach (var d in state.Depots)
             {

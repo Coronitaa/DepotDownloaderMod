@@ -16,6 +16,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="BlueStar.Infrastructure" />
+    <InternalsVisibleTo Include="BlueStar.Infrastructure.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="..\LICENSE" Link="LICENSE">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>

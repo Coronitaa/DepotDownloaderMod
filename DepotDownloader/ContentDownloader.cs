@@ -1,4 +1,4 @@
-﻿// This file is subject to the terms and conditions defined
+// This file is subject to the terms and conditions defined
 // in file 'LICENSE', which is part of this source code package.
 
 using System;
@@ -360,6 +360,156 @@ namespace DepotDownloader
             Task.Run(steam3.TickCallbacks);
 
             return true;
+        }
+
+        public static bool InitializeSteam3WithToken(string? username, string? accessToken, uint? loginId = null)
+        {
+            if (steam3 != null && steam3.IsLoggedOn)
+            {
+                return true;
+            }
+
+            ShutdownSteam3();
+
+            steam3 = new Steam3Session(
+                new SteamUser.LogOnDetails
+                {
+                    Username = username,
+                    Password = null,
+                    ShouldRememberPassword = false,
+                    AccessToken = accessToken,
+                    LoginID = loginId ?? Config.LoginID ?? 0x534B32,
+                }
+            );
+
+            if (!steam3.WaitForCredentials())
+            {
+                Console.WriteLine("Unable to get steam3 credentials with session token.");
+                ShutdownSteam3();
+                return false;
+            }
+
+            Task.Run(steam3.TickCallbacks);
+
+            return true;
+        }
+
+        /// <summary>
+        /// Downloads a specific manifest binary entirely in-process using SteamKit2 and CDNClientPool,
+        /// authenticating with the active Steam session token when available, without opening any UI,
+        /// external processes, or disrupting desktop workflows.
+        /// </summary>
+        public static async Task<string?> DownloadManifestInProcessAsync(
+            uint appId,
+            uint depotId,
+            ulong manifestId,
+            string outputDirectory,
+            string? username = null,
+            string? accessToken = null,
+            CancellationToken ct = default)
+        {
+            Directory.CreateDirectory(outputDirectory);
+
+            if (steam3 == null || !steam3.IsLoggedOn)
+            {
+                bool connected = false;
+                if (!string.IsNullOrWhiteSpace(accessToken))
+                {
+                    connected = InitializeSteam3WithToken(username, accessToken);
+                }
+
+                if (!connected)
+                {
+                    connected = InitializeSteam3(null, null);
+                }
+
+                if (!connected)
+                {
+                    return null;
+                }
+            }
+
+            Config = new DownloadConfig
+            {
+                DownloadManifestOnly = true,
+                InstallDirectory = outputDirectory,
+                MaxDownloads = 4
+            };
+
+            CancellationToken = ct;
+
+            var depotPairs = new List<(uint depotId, ulong manifestId)> { (depotId, manifestId) };
+
+            try
+            {
+                await DownloadAppAsync(
+                    appId,
+                    depotPairs,
+                    DEFAULT_BRANCH,
+                    null, null, null, false, false
+                ).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"In-process manifest download notice for depot {depotId}: {ex.Message}");
+            }
+
+            var candidatePaths = new[]
+            {
+                Path.Combine(outputDirectory, CONFIG_DIR, $"{depotId}_{manifestId}.manifest"),
+                Path.Combine(outputDirectory, $"{depotId}_{manifestId}.manifest"),
+                Path.Combine(outputDirectory, CONFIG_DIR, $"{manifestId}.manifest"),
+                Path.Combine(outputDirectory, $"{manifestId}.manifest")
+            };
+
+            foreach (var path in candidatePaths)
+            {
+                if (File.Exists(path) && ValidateManifestProtobufHeader(path))
+                {
+                    return path;
+                }
+            }
+
+            try
+            {
+                if (Directory.Exists(outputDirectory))
+                {
+                    var files = Directory.GetFiles(outputDirectory, "*.manifest", SearchOption.AllDirectories);
+                    foreach (var f in files)
+                    {
+                        if (ValidateManifestProtobufHeader(f))
+                        {
+                            return f;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            return null;
+        }
+
+        public static bool ValidateManifestProtobufHeader(string filePath)
+        {
+            try
+            {
+                if (!File.Exists(filePath)) return false;
+                var fi = new FileInfo(filePath);
+                if (fi.Length < 4) return false;
+
+                using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                var header = new byte[4];
+                var bytesRead = fs.Read(header, 0, 4);
+                if (bytesRead < 4) return false;
+
+                // [0xD0, 0x17, 0xF6, 0x71] (LE) or [0x71, 0xF6, 0x17, 0xD0] (BE)
+                return (header[0] == 0xD0 && header[1] == 0x17 && header[2] == 0xF6 && header[3] == 0x71) ||
+                       (header[0] == 0x71 && header[1] == 0xF6 && header[2] == 0x17 && header[3] == 0xD0);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         public static void ShutdownSteam3()

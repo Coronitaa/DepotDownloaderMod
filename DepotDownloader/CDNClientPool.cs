@@ -32,7 +32,9 @@ namespace DepotDownloader
 
         public async Task UpdateServerList()
         {
-            var servers = await this.steamSession.steamContent.GetServersForSteamPipe();
+            var servers = ContentDownloader.Config.CellID > 0
+                ? await this.steamSession.steamContent.GetServersForSteamPipe((uint)ContentDownloader.Config.CellID)
+                : await this.steamSession.steamContent.GetServersForSteamPipe();
 
             ProxyServer = servers.Where(x => x.UseAsProxy).FirstOrDefault();
 

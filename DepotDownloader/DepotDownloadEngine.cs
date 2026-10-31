@@ -76,7 +76,7 @@ public sealed class DepotDownloadEngine : IDepotDownloadEngine
         {
             InstallDirectory = request.InstallPath,
             MaxDownloads = Math.Max(1, request.MaxConnections),
-            CellID = 0,
+            CellID = request.CellId,
             VerifyAll = request.ValidateExisting,
         };
 

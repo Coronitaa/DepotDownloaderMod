@@ -28,6 +28,11 @@ public sealed class DepotDownloadRequest
     public int MaxConnections { get; init; } = 8;
 
     /// <summary>
+    /// Overridden Steam Content Server Cell ID (0 = Automatic / fastest suggested by Steam).
+    /// </summary>
+    public int CellId { get; init; } = 0;
+
+    /// <summary>
     /// Path to a file containing depot keys in "depotId;hexKey" format per line.
     /// When set, anonymous download with pre-supplied keys is used.
     /// </summary>

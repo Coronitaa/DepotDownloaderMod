@@ -447,7 +447,17 @@ namespace DepotDownloader
                 if (!authenticatedUser)
                 {
                     Console.Write("Logging anonymously into Steam3...");
-                    steamUser.LogOnAnonymous();
+                    if (ContentDownloader.Config.CellID > 0)
+                    {
+                        steamUser.LogOnAnonymous(new SteamUser.AnonymousLogOnDetails
+                        {
+                            CellID = (uint)ContentDownloader.Config.CellID
+                        });
+                    }
+                    else
+                    {
+                        steamUser.LogOnAnonymous();
+                    }
                 }
                 else
                 {
@@ -560,6 +570,11 @@ namespace DepotDownloader
                         }
 
                         authSession = null;
+                    }
+
+                    if (ContentDownloader.Config.CellID > 0)
+                    {
+                        logonDetails.CellID = (uint)ContentDownloader.Config.CellID;
                     }
 
                     steamUser.LogOn(logonDetails);
